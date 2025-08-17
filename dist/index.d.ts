@@ -1,5 +1,7 @@
 type Cleanup = void | (() => void);
 export declare function setGlobalRerender(fn: (() => void) | null): void;
+export declare function registerInstanceRerender(id: symbol, fn: () => void): void;
+export declare function unregisterInstanceRerender(id: symbol): void;
 export declare function createComponentInstance(): symbol;
 export declare function setCurrentInstance(id: symbol | null): void;
 export declare function clearCurrentInstance(): void;

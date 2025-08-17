@@ -1,8 +1,16 @@
 const instances = new Map();
 let currentInstance = null;
 let globalRerender = null;
+// map instanceId -> rerender callback provided by renderer
+const instanceRerenders = new Map();
 export function setGlobalRerender(fn) {
     globalRerender = fn;
+}
+export function registerInstanceRerender(id, fn) {
+    instanceRerenders.set(id, fn);
+}
+export function unregisterInstanceRerender(id) {
+    instanceRerenders.delete(id);
 }
 export function createComponentInstance() {
     const id = Symbol("comp");
@@ -24,7 +32,6 @@ export function cleanupComponentInstance(id) {
     const rec = instances.get(id);
     if (!rec)
         return;
-    // run effect cleanups
     for (const slot of rec.hooks) {
         if (slot && slot.type === "effect") {
             const eff = slot;
@@ -37,6 +44,7 @@ export function cleanupComponentInstance(id) {
         }
     }
     instances.delete(id);
+    unregisterInstanceRerender(id);
 }
 export function runMounted(id) {
     const rec = instances.get(id);
@@ -129,7 +137,6 @@ export function onEffect(effect, deps) {
         const eff = existing;
         eff.effect = effect;
         eff.deps = deps ? deps.slice() : undefined;
-        // we'll run it during runEffectsForInstance
         return () => {
             if (typeof eff.cleanup === "function") {
                 try {
@@ -138,7 +145,6 @@ export function onEffect(effect, deps) {
                 catch { }
                 eff.cleanup = undefined;
             }
-            // remove effect slot
             rec.hooks[idx] = { type: "other" };
         };
     }
@@ -176,14 +182,27 @@ export function ref(initial) {
         else {
             let value = initial;
             const subs = new Set();
-            const getter = (() => value);
+            const getter = (() => {
+                // auto-subscribe this currentInstance's rerender when getter is called during render
+                try {
+                    if (currentInstance) {
+                        const rer = instanceRerenders.get(currentInstance);
+                        if (rer) {
+                            // subscribe the instance rerender if not already subscribed
+                            subs.add(rer);
+                        }
+                    }
+                }
+                catch { }
+                return value;
+            });
             getter._isRefGetter = true;
             function setter(val) {
                 const next = typeof val === "function" ? val(value) : val;
                 const changed = !Object.is(value, next);
                 value = next;
                 if (changed) {
-                    for (const s of subs) {
+                    for (const s of Array.from(subs)) {
                         try {
                             s();
                         }
@@ -207,7 +226,7 @@ export function ref(initial) {
             return [getter, setter];
         }
     }
-    // fallback: standalone ref (not tied to component instance) — useful for outside usage
+    // fallback: standalone ref (not tied to component instance)
     let value = initial;
     const subs = new Set();
     const getter = (() => value);
@@ -217,7 +236,7 @@ export function ref(initial) {
         const changed = !Object.is(value, next);
         value = next;
         if (changed) {
-            for (const s of subs) {
+            for (const s of Array.from(subs)) {
                 try {
                     s();
                 }
