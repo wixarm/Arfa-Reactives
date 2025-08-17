@@ -1,6 +1,6 @@
 {
   "name": "arfa-reactives",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Tiny reactive hooks for Arfa (ref, onMounted, onEffect)",
   "type": "module",
   "main": "dist/index.js",
