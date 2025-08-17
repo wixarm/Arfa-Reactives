@@ -1,18 +1,65 @@
-# arfa-reactives
+<div align="center">
+  <a href="https://armantarhani.ir">
+    <picture>
+       <img alt="Arfa.js logo" src="https://iili.io/FbTuVl2.md.png" height="160" />
+    </picture>
 
-Tiny reactive hooks for Arfa-style components.
+  </a>
+  <h1>Arfa.js</h1>
 
-## Install
+</div>
 
-npm i arfa-reactives
+---
 
-## Exports
+## 📖 Overview
 
-- `ref(initial?)` → `[getter, setter]` (getter is a zero-arg function; setter updates value)
-- `onMounted(cb)` → register a mounted callback (must be called while a component is running)
-- `onEffect(effect, deps?)` → register effect with deps array; returns cleanup remover
-- `createComponentInstance()` → create instance id (renderer)
-- `setCurrentInstance(id)` / `clearCurrentInstance()` → mark which instance is current during component execution
-- `runMounted(instanceId)` → call after DOM insertion to run mounted callbacks and initial effects
-- `cleanupComponentInstance(id)` → call before discarding instance to run effect cleanups
-- `setGlobalRerender(fn)` → optional: set a global re-render function that `ref` will call on updates
+**arfa-reactives** is the reactivity system built for the **Arfa.js** framework.
+It provides a simple, lightweight way to manage state and lifecycle inside Arfa.js components.
+
+**Arfa.js** uses the arfa-reactives package to provide a familiar but lightweight hook system:
+
+ref(initialValue) → Create reactive state ([getter, setter])
+
+onMounted(fn) → Run logic when a component is mounted
+
+onEffect(fn, deps) → Run side effects when dependencies change
+
+Example Usage:
+
+```bash
+import { onMounted, onEffect, ref } from "arfa-reactives";
+
+export default function CounterExample() {
+  const [count, setCount] = ref(1);
+  const [showMessage, setShowMessage] = ref(true);
+
+  // Run once on mount
+  onMounted(() => {
+    console.log("Component mounted with initial count:", count());
+  });
+
+  // Effect runs when count changes
+  onEffect(() => {
+    console.log("Count changed:", count());
+    return () => console.log("Cleaning up for count:", count());
+  }, [count]);
+
+  // Effect runs when showMessage changes
+  onEffect(() => {
+    console.log("Show message changed:", showMessage());
+  }, [showMessage]);
+
+  return (
+    <div>
+      <h2>Current count: {count()}</h2>
+      <button onClick={() => setCount(c => c + 1)}>Increment</button>
+      <button onClick={() => setShowMessage(v => !v)}>Toggle Message</button>
+
+      {showMessage() && (
+        <p>{count() % 2 === 0 ? "Count is even!" : "Count is odd!"}</p>
+      )}
+    </div>
+  );
+}
+
+```
