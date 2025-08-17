@@ -28,8 +28,19 @@ const instances = new Map<symbol, InstanceRecord>();
 let currentInstance: symbol | null = null;
 let globalRerender: (() => void) | null = null;
 
+// map instanceId -> rerender callback provided by renderer
+const instanceRerenders = new Map<symbol, () => void>();
+
 export function setGlobalRerender(fn: (() => void) | null) {
   globalRerender = fn;
+}
+
+export function registerInstanceRerender(id: symbol, fn: () => void) {
+  instanceRerenders.set(id, fn);
+}
+
+export function unregisterInstanceRerender(id: symbol) {
+  instanceRerenders.delete(id);
 }
 
 export function createComponentInstance(): symbol {
@@ -53,7 +64,6 @@ export function clearCurrentInstance() {
 export function cleanupComponentInstance(id: symbol) {
   const rec = instances.get(id);
   if (!rec) return;
-  // run effect cleanups
   for (const slot of rec.hooks) {
     if (slot && (slot as EffectSlot).type === "effect") {
       const eff = slot as EffectSlot;
@@ -65,6 +75,7 @@ export function cleanupComponentInstance(id: symbol) {
     }
   }
   instances.delete(id);
+  unregisterInstanceRerender(id);
 }
 
 export function runMounted(id: symbol) {
@@ -156,7 +167,6 @@ export function onEffect(effect: () => Cleanup, deps?: any[]) {
     const eff = existing as EffectSlot;
     eff.effect = effect;
     eff.deps = deps ? deps.slice() : undefined;
-    // we'll run it during runEffectsForInstance
     return () => {
       if (typeof eff.cleanup === "function") {
         try {
@@ -164,7 +174,6 @@ export function onEffect(effect: () => Cleanup, deps?: any[]) {
         } catch {}
         eff.cleanup = undefined;
       }
-      // remove effect slot
       rec.hooks[idx] = { type: "other" };
     };
   } else {
@@ -205,14 +214,26 @@ export function ref<T = any>(
     } else {
       let value = initial as T | undefined;
       const subs = new Set<() => void>();
-      const getter = (() => value) as any;
+      const getter = (() => {
+        // auto-subscribe this currentInstance's rerender when getter is called during render
+        try {
+          if (currentInstance) {
+            const rer = instanceRerenders.get(currentInstance);
+            if (rer) {
+              // subscribe the instance rerender if not already subscribed
+              subs.add(rer);
+            }
+          }
+        } catch {}
+        return value;
+      }) as any;
       getter._isRefGetter = true;
       function setter(val: T | ((prev: T | undefined) => T)) {
         const next = typeof val === "function" ? (val as any)(value) : val;
         const changed = !Object.is(value, next);
         value = next;
         if (changed) {
-          for (const s of subs) {
+          for (const s of Array.from(subs)) {
             try {
               s();
             } catch {}
@@ -234,7 +255,7 @@ export function ref<T = any>(
     }
   }
 
-  // fallback: standalone ref (not tied to component instance) — useful for outside usage
+  // fallback: standalone ref (not tied to component instance)
   let value = initial as T | undefined;
   const subs = new Set<() => void>();
   const getter = (() => value) as any;
@@ -244,7 +265,7 @@ export function ref<T = any>(
     const changed = !Object.is(value, next);
     value = next;
     if (changed) {
-      for (const s of subs) {
+      for (const s of Array.from(subs)) {
         try {
           s();
         } catch {}
