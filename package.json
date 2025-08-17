@@ -1,0 +1,28 @@
+{
+  "name": "arfa-reactives",
+  "version": "0.1.1",
+  "description": "Tiny reactive hooks for Arfa",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "arfa",
+    "reactive",
+    "hooks",
+    "ref",
+    "onMounted",
+    "onEffect"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
