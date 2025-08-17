@@ -1,16 +1,23 @@
 {
   "name": "arfa-reactives",
-  "version": "0.1.1",
-  "description": "Tiny reactive hooks for Arfa",
+  "version": "0.1.2",
+  "description": "Tiny reactive hooks for Arfa (ref, onMounted, onEffect)",
+  "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "clean": "rm -rf dist"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "arfa",
@@ -23,6 +30,6 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "typescript": "^5.9.0"
   }
 }

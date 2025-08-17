@@ -1,39 +1,21 @@
-type Cleanup = void | (() => void);
-type EffectRecord = {
-  effect: () => Cleanup;
-  deps: any[] | undefined;
-  lastDeps?: any[];
-  cleanup?: (() => void) | void;
-};
-
-type InstanceRecord = {
-  mounted: Array<() => void>;
-  effects: EffectRecord[];
-};
-
-const instances = new Map<symbol, InstanceRecord>();
-let currentInstance: symbol | null = null;
-let globalRerender: (() => void) | null = null;
-
-export function setGlobalRerender(fn: (() => void) | null) {
+const instances = new Map();
+let currentInstance = null;
+let globalRerender = null;
+function setGlobalRerender(fn) {
   globalRerender = fn;
 }
-
-export function createComponentInstance(): symbol {
+function createComponentInstance() {
   const id = Symbol("comp");
   instances.set(id, { mounted: [], effects: [] });
   return id;
 }
-
-export function setCurrentInstance(id: symbol | null) {
+function setCurrentInstance(id) {
   currentInstance = id;
 }
-
-export function clearCurrentInstance() {
+function clearCurrentInstance() {
   currentInstance = null;
 }
-
-export function cleanupComponentInstance(id: symbol) {
+function cleanupComponentInstance(id) {
   const rec = instances.get(id);
   if (!rec) return;
   for (const e of rec.effects) {
@@ -45,8 +27,7 @@ export function cleanupComponentInstance(id: symbol) {
   }
   instances.delete(id);
 }
-
-export function runMounted(id: symbol) {
+function runMounted(id) {
   const rec = instances.get(id);
   if (!rec) return;
   for (const cb of rec.mounted) {
@@ -58,17 +39,15 @@ export function runMounted(id: symbol) {
   }
   runEffectsForInstance(id);
 }
-
-function getDepValue(dep: any) {
+function getDepValue(dep) {
   try {
-    if (typeof dep === "function" && (dep as any)._isRefGetter) {
+    if (typeof dep === "function" && dep._isRefGetter) {
       return dep();
     }
   } catch {}
   return dep;
 }
-
-function depsChanged(last?: any[], next?: any[]) {
+function depsChanged(last, next) {
   if (!last) return true;
   if (!next) return true;
   if (last.length !== next.length) return true;
@@ -77,12 +56,11 @@ function depsChanged(last?: any[], next?: any[]) {
   }
   return false;
 }
-
-function runEffectsForInstance(id: symbol) {
+function runEffectsForInstance(id) {
   const rec = instances.get(id);
   if (!rec) return;
   for (const eff of rec.effects) {
-    const nextDeps = eff.deps?.map(getDepValue);
+    const nextDeps = eff.deps ? eff.deps.map(getDepValue) : undefined;
     const changed = depsChanged(eff.lastDeps, nextDeps);
     if (changed) {
       if (typeof eff.cleanup === "function") {
@@ -102,31 +80,28 @@ function runEffectsForInstance(id: symbol) {
     }
   }
 }
-
-export function triggerEffectsForAllInstances() {
+function triggerEffectsForAllInstances() {
   for (const id of instances.keys()) {
     runEffectsForInstance(id);
   }
 }
-
-export function onMounted(cb: () => void) {
+function onMounted(cb) {
   if (!currentInstance) {
     throw new Error(
       "onMounted must be called during component render (set current instance with setCurrentInstance)."
     );
   }
-  const rec = instances.get(currentInstance)!;
+  const rec = instances.get(currentInstance);
   rec.mounted.push(cb);
 }
-
-export function onEffect(effect: () => Cleanup, deps?: any[]) {
+function onEffect(effect, deps) {
   if (!currentInstance) {
     throw new Error(
       "onEffect must be called during component render (set current instance with setCurrentInstance)."
     );
   }
-  const rec = instances.get(currentInstance)!;
-  const record: EffectRecord = {
+  const rec = instances.get(currentInstance);
+  const record = {
     effect,
     deps: deps ? deps.slice() : undefined,
     lastDeps: undefined,
@@ -144,19 +119,13 @@ export function onEffect(effect: () => Cleanup, deps?: any[]) {
     if (idx >= 0) rec.effects.splice(idx, 1);
   };
 }
-
-export function ref<T = any>(
-  initial?: T
-): [
-  (() => T) & { _isRefGetter?: true },
-  (val: T | ((prev: T | undefined) => T)) => void
-] {
-  let value = initial as T | undefined;
-  const subs = new Set<() => void>();
-  const getter = (() => value) as any;
+function ref(initial) {
+  let value = initial;
+  const subs = new Set();
+  const getter = () => value;
   getter._isRefGetter = true;
-  function setter(val: T | ((prev: T | undefined) => T)) {
-    const next = typeof val === "function" ? (val as any)(value) : val;
+  function setter(val) {
+    const next = typeof val === "function" ? val(value) : val;
     const changed = !Object.is(value, next);
     value = next;
     if (changed) {
@@ -174,7 +143,20 @@ export function ref<T = any>(
       }
     }
   }
-  (getter as any).__subscribe = (cb: () => void) => subs.add(cb);
-  (getter as any).__unsubscribe = (cb: () => void) => subs.delete(cb);
+  getter.__subscribe = (cb) => subs.add(cb);
+  getter.__unsubscribe = (cb) => subs.delete(cb);
   return [getter, setter];
 }
+export {
+  cleanupComponentInstance,
+  clearCurrentInstance,
+  createComponentInstance,
+  onEffect,
+  onMounted,
+  ref,
+  runMounted,
+  setCurrentInstance,
+  setGlobalRerender,
+  triggerEffectsForAllInstances,
+};
+export default null;
