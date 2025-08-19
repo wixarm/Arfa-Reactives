@@ -1,7 +1,7 @@
 <div align="center">
   <a href="https://armantarhani.ir">
     <picture>
-       <img alt="Arfa.js logo" src="https://iili.io/FbTuVl2.md.png" height="160" />
+       <img alt="Arfa.js logo" src="/docs/assets/logo.png" height="160" />
     </picture>
 
   </a>
