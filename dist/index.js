@@ -246,8 +246,8 @@ export function ref(initial, options) {
                 return;
             if (storage) {
                 try {
-                    const value = typeof next === "function" ? next(getter()) : next;
-                    storage.setItem(fullKey, ser(value));
+                    const valueToStore = getter();
+                    storage.setItem(fullKey, ser(valueToStore));
                 }
                 catch { }
             }
