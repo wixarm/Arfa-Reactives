@@ -1,11 +1,17 @@
 type Cleanup = void | (() => void);
 
+/* =========================
+   Hook & Instance Types
+========================= */
+
 type RefSlot = {
   type: "ref";
   value: any;
   subs: Set<() => void>;
   getter: (() => any) & { _isRefGetter?: true };
   setter: (val: any) => void;
+  // internal flag when persistence was initialized
+  __persistInitialized?: boolean;
 };
 
 type EffectSlot = {
@@ -23,6 +29,10 @@ type InstanceRecord = {
   hooks: HookSlot[];
   hookIndex: number;
 };
+
+/* =========================
+   Core Runtime
+========================= */
 
 const instances = new Map<symbol, InstanceRecord>();
 let currentInstance: symbol | null = null;
@@ -196,18 +206,163 @@ export function onEffect(effect: () => Cleanup, deps?: any[]) {
   }
 }
 
+/* =========================
+   Persistence (opt-in)
+========================= */
+
+type PersistOptions<T> = {
+  key: string; // required
+  version?: number;
+  keyPrefix?: string; // default "arfa:"
+  serialize?: (v: T) => string; // default JSON envelope {v,d}
+  deserialize?: (s: string) => T; // default JSON envelope reader
+  sync?: boolean; // cross-tab via storage event (default true)
+};
+
+type RefOptions<T> = { persist?: PersistOptions<T> };
+type PersistEnvelope = { v?: number; d: any };
+
+const persistUpdaters = new Map<
+  string,
+  (val: any, cause?: "external") => void
+>();
+let storageListenerReady = false;
+
+function getStorage(): Storage | null {
+  try {
+    if (typeof window !== "undefined" && window.localStorage)
+      return window.localStorage;
+  } catch {}
+  return null;
+}
+
+function ensureStorageListener() {
+  if (storageListenerReady || typeof window === "undefined") return;
+  try {
+    window.addEventListener("storage", (e: StorageEvent) => {
+      if (!e.key) return;
+      const update = persistUpdaters.get(e.key);
+      if (!update) return;
+      try {
+        if (e.newValue == null) return;
+        const env: PersistEnvelope = JSON.parse(e.newValue);
+        update(env.d, "external");
+      } catch {}
+    });
+    storageListenerReady = true;
+  } catch {}
+}
+
+/* =========================
+   ref() with overloads
+========================= */
+
+// Overload: legacy call (no options)
 export function ref<T = any>(
   initial?: T
 ): [
   (() => T) & { _isRefGetter?: true },
   (val: T | ((prev: T | undefined) => T)) => void
+];
+
+// Overload: with options (persist)
+export function ref<T = any>(
+  initial: T | undefined,
+  options: RefOptions<T>
+): [
+  (() => T) & { _isRefGetter?: true },
+  (val: T | ((prev: T | undefined) => T)) => void
+];
+
+// Implementation
+export function ref<T = any>(
+  initial?: T,
+  options?: RefOptions<T>
+): [
+  (() => T) & { _isRefGetter?: true },
+  (val: T | ((prev: T | undefined) => T)) => void
 ] {
+  const persist = options?.persist;
+
+  // set up persistence around a base setter + getter
+  function initPersistence(
+    getter: (() => T) & { _isRefGetter?: true },
+    baseSetter: (val: T | ((prev: T | undefined) => T)) => void
+  ): (val: T | ((prev: T | undefined) => T)) => void {
+    if (!persist) return baseSetter;
+
+    const storage = getStorage();
+    const fullKey = `${persist.keyPrefix ?? "arfa:"}${persist.key}`;
+    const ser =
+      persist.serialize ??
+      ((v: T) =>
+        JSON.stringify({ v: persist.version, d: v } as PersistEnvelope));
+    const deser =
+      persist.deserialize ??
+      ((s: string) => {
+        const env: PersistEnvelope = JSON.parse(s);
+        if (persist.version != null && env.v !== persist.version) {
+          throw new Error("version mismatch");
+        }
+        return env.d as T;
+      });
+
+    // hydrate once
+    if (storage) {
+      try {
+        const raw = storage.getItem(fullKey);
+        if (raw != null) {
+          const val = deser(raw);
+          baseSetter(val); // pass value directly
+        } else {
+          try {
+            const cur = getter();
+            storage.setItem(fullKey, ser(cur));
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // wrap setter to write to storage (unless external)
+    const wrapped = (next: any, cause?: "external") => {
+      baseSetter(next);
+      if (cause === "external") return;
+      if (storage) {
+        try {
+          const value = typeof next === "function" ? next(getter()) : next;
+          storage.setItem(fullKey, ser(value));
+        } catch {}
+      }
+    };
+
+    // cross-tab sync
+    if (persist.sync !== false && storage) {
+      persistUpdaters.set(fullKey, (val, cause) => {
+        wrapped(val, cause); // pass value directly
+        try {
+          triggerEffectsForAllInstances();
+        } catch {}
+      });
+      ensureStorageListener();
+    }
+
+    // public setter
+    return (v: any) => wrapped(v);
+  }
+
+  // ===== Hook path (component instance) =====
   if (currentInstance) {
     const rec = instances.get(currentInstance)!;
     const idx = rec.hookIndex++;
     const existing = rec.hooks[idx];
+
     if (existing && (existing as any).type === "ref") {
       const r = existing as RefSlot;
+      // lazily init persistence exactly once per hook slot
+      if (persist && !r.__persistInitialized) {
+        r.setter = initPersistence(r.getter as any, r.setter as any) as any;
+        r.__persistInitialized = true;
+      }
       return [r.getter, r.setter];
     } else {
       let value = initial as T | undefined;
@@ -224,7 +379,8 @@ export function ref<T = any>(
         return value;
       }) as any;
       getter._isRefGetter = true;
-      function setter(val: T | ((prev: T | undefined) => T)) {
+
+      function baseSetter(val: T | ((prev: T | undefined) => T)) {
         const next = typeof val === "function" ? (val as any)(value) : val;
         const changed = !Object.is(value, next);
         value = next;
@@ -243,19 +399,27 @@ export function ref<T = any>(
           }
         }
       }
+
+      const setter = initPersistence(getter, baseSetter);
+
       (getter as any).__subscribe = (cb: () => void) => subs.add(cb);
       (getter as any).__unsubscribe = (cb: () => void) => subs.delete(cb);
+
       const slot: RefSlot = { type: "ref", value, subs, getter, setter };
+      if (persist) slot.__persistInitialized = true;
+
       rec.hooks[idx] = slot;
       return [getter, setter];
     }
   }
 
+  // ===== Standalone path (outside render) =====
   let value = initial as T | undefined;
   const subs = new Set<() => void>();
   const getter = (() => value) as any;
   getter._isRefGetter = true;
-  function setter(val: T | ((prev: T | undefined) => T)) {
+
+  function baseSetter(val: T | ((prev: T | undefined) => T)) {
     const next = typeof val === "function" ? (val as any)(value) : val;
     const changed = !Object.is(value, next);
     value = next;
@@ -274,12 +438,17 @@ export function ref<T = any>(
       }
     }
   }
+
+  const setter = initPersistence(getter, baseSetter);
+
   (getter as any).__subscribe = (cb: () => void) => subs.add(cb);
   (getter as any).__unsubscribe = (cb: () => void) => subs.delete(cb);
   return [getter, setter];
 }
 
-// ===== Context API =====
+/* =========================
+   Context API
+========================= */
 
 type Getter<T> = (() => T) & {
   _isRefGetter?: true;
@@ -437,25 +606,9 @@ export function withContext<T, R>(
   }
 }
 
-// how to use
-
-// 1) define a context
-// const ThemeCtx = createContext<"light" | "dark">("light");
-
-// 2) somewhere high up in your render tree:
-// withContext(ThemeCtx, "dark", () => {
-// children rendered here see "dark"
+/* =========================
+   Usage (example)
+========================= */
+// const [theme, setTheme] = ref<"light" | "dark">("light", {
+//   persist: { key: "theme", version: 1, keyPrefix: "arfa:", sync: true }
 // });
-
-// Or provide a reactive ref so consumers re-render when it changes:
-// const [theme, setTheme] = ref<"light" | "dark">("light");
-// withContext(ThemeCtx, theme, () => {
-// ...children...
-// calling setTheme("dark") will re-render consumers that call useContext(ThemeCtx)
-// });
-
-// 3) consume in a component:
-// function MyButton() {
-// const t = useContext(ThemeCtx); // "light" | "dark"
-// render using `t`
-// }
