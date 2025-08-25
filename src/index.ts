@@ -326,11 +326,13 @@ export function ref<T = any>(
     // wrap setter to write to storage (unless external)
     const wrapped = (next: any, cause?: "external") => {
       baseSetter(next);
+
       if (cause === "external") return;
+
       if (storage) {
         try {
-          const value = typeof next === "function" ? next(getter()) : next;
-          storage.setItem(fullKey, ser(value));
+          const valueToStore = getter();
+          storage.setItem(fullKey, ser(valueToStore));
         } catch {}
       }
     };
