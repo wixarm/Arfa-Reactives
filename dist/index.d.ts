@@ -10,7 +10,24 @@ export declare function runMounted(id: symbol): void;
 export declare function triggerEffectsForAllInstances(): void;
 export declare function onMounted(cb: () => void): void;
 export declare function onEffect(effect: () => Cleanup, deps?: any[]): () => void;
+type PersistOptions<T> = {
+    key: string;
+    version?: number;
+    keyPrefix?: string;
+    serialize?: (v: T) => string;
+    deserialize?: (s: string) => T;
+    sync?: boolean;
+};
+type RefOptions<T> = {
+    persist?: PersistOptions<T>;
+};
 export declare function ref<T = any>(initial?: T): [
+    (() => T) & {
+        _isRefGetter?: true;
+    },
+    (val: T | ((prev: T | undefined) => T)) => void
+];
+export declare function ref<T = any>(initial: T | undefined, options: RefOptions<T>): [
     (() => T) & {
         _isRefGetter?: true;
     },
