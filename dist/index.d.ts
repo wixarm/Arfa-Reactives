@@ -16,4 +16,35 @@ export declare function ref<T = any>(initial?: T): [
     },
     (val: T | ((prev: T | undefined) => T)) => void
 ];
+type Getter<T> = (() => T) & {
+    _isRefGetter?: true;
+    __subscribe?: (cb: () => void) => void;
+    __unsubscribe?: (cb: () => void) => void;
+};
+export type Context<T> = {
+    _id: symbol;
+    _defaultGetter: Getter<T>;
+    _stack: Getter<T>[];
+};
+export declare function createContext<T>(defaultValue: T): Context<T>;
+/**
+ * useContext(ctx)
+ * - Reads the nearest provided value (or default).
+ * - Subscribes this component instance to updates from the underlying ref getter,
+ *   so a ref.set(...) in the provider re-renders the consumer.
+ */
+export declare function useContext<T>(ctx: Context<T>): T;
+/**
+ * withContext(ctx, valueOrGetter, render)
+ * A minimal Provider helper you can use in your renderer:
+ *
+ * withContext(MyCtx, someRefGetter /* or constant * /, () => {
+ *   // render children under this context
+ * });
+ *
+ * - Pushes the provider getter for the duration of render()
+ * - If the binding changed (different getter identity vs. previously at this stack level),
+ *   it triggers a global re-run so consumers can resubscribe to the new getter.
+ */
+export declare function withContext<T, R>(ctx: Context<T>, valueOrGetter: T | Getter<T>, render: () => R): R;
 export {};
