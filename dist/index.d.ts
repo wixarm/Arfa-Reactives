@@ -9,6 +9,7 @@ export declare function cleanupComponentInstance(id: symbol): void;
 export declare function runMounted(id: symbol): void;
 export declare function triggerEffectsForAllInstances(): void;
 export declare function onMounted(cb: () => void): void;
+export declare function onUnmounted(cb: () => void): void;
 export declare function onEffect(effect: () => Cleanup, deps?: any[]): () => void;
 type PersistOptions<T> = {
     key: string;
@@ -64,4 +65,8 @@ export declare function useContext<T>(ctx: Context<T>): T;
  *   it triggers a global re-run so consumers can resubscribe to the new getter.
  */
 export declare function withContext<T, R>(ctx: Context<T>, valueOrGetter: T | Getter<T>, render: () => R): R;
+export declare function onMemo<T>(factory: () => T, deps?: any[]): T;
+export declare function onComputed<T>(factory: () => T, deps: any[]): (() => T) & {
+    _isRefGetter?: true;
+};
 export {};

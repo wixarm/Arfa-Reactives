@@ -16,7 +16,7 @@ export function unregisterInstanceRerender(id) {
 }
 export function createComponentInstance() {
     const id = Symbol("comp");
-    instances.set(id, { mounted: [], hooks: [], hookIndex: 0 });
+    instances.set(id, { mounted: [], unmounted: [], hooks: [], hookIndex: 0 });
     return id;
 }
 export function setCurrentInstance(id) {
@@ -34,6 +34,14 @@ export function cleanupComponentInstance(id) {
     const rec = instances.get(id);
     if (!rec)
         return;
+    for (const cb of rec.unmounted) {
+        try {
+            cb();
+        }
+        catch (err) {
+            console.error("Error in unmounted hook:", err);
+        }
+    }
     for (const slot of rec.hooks) {
         if (slot && slot.type === "effect") {
             const eff = slot;
@@ -127,6 +135,13 @@ export function onMounted(cb) {
     }
     const rec = instances.get(currentInstance);
     rec.mounted.push(cb);
+}
+export function onUnmounted(cb) {
+    if (!currentInstance) {
+        throw new Error("onUnmounted must be called during component render (set current instance with setCurrentInstance).");
+    }
+    const rec = instances.get(currentInstance);
+    rec.unmounted.push(cb);
 }
 export function onEffect(effect, deps) {
     if (!currentInstance) {
@@ -468,9 +483,6 @@ export function withContext(ctx, valueOrGetter, render) {
     const stack = ctx._stack;
     const prevTop = stack.length ? stack[stack.length - 1] : undefined;
     stack.push(newGetter);
-    // If the provider binding itself changed (different getter identity),
-    // poke a global re-render so consumers calling useContext will run again
-    // and attach to the new getter.
     if (prevTop !== newGetter) {
         try {
             if (globalRerender) {
@@ -486,9 +498,108 @@ export function withContext(ctx, valueOrGetter, render) {
         return render();
     }
     finally {
-        // Pop and we're done. Subscriptions to the underlying ref getter persist
-        // across renders; consumers will re-attach on the next render pass anyway.
         stack.pop();
+    }
+}
+export function onMemo(factory, deps) {
+    if (!currentInstance) {
+        throw new Error("onMemo must be called during component render (set current instance with setCurrentInstance).");
+    }
+    const rec = instances.get(currentInstance);
+    const idx = rec.hookIndex++;
+    const existing = rec.hooks[idx];
+    if (existing && existing.type === "memo") {
+        const memo = existing;
+        const nextDeps = deps === null || deps === void 0 ? void 0 : deps.map(getDepValue);
+        const changed = depsChanged(memo.lastDeps, nextDeps);
+        if (changed) {
+            try {
+                memo.value = factory();
+                memo.lastDeps = nextDeps;
+                memo.deps = deps ? deps.slice() : undefined;
+            }
+            catch (err) {
+                console.error("Error in onMemo factory:", err);
+            }
+        }
+        return memo.value;
+    }
+    else {
+        const slot = {
+            type: "memo",
+            factory,
+            deps: deps ? deps.slice() : undefined,
+            lastDeps: undefined,
+            value: undefined,
+        };
+        try {
+            slot.value = factory();
+            slot.lastDeps = deps === null || deps === void 0 ? void 0 : deps.map(getDepValue);
+        }
+        catch (err) {
+            console.error("Error in onMemo factory:", err);
+        }
+        rec.hooks[idx] = slot;
+        return slot.value;
+    }
+}
+export function onComputed(factory, deps) {
+    if (!currentInstance) {
+        throw new Error("onComputed must be called during component render (set current instance with setCurrentInstance).");
+    }
+    const rec = instances.get(currentInstance);
+    const idx = rec.hookIndex++;
+    const existing = rec.hooks[idx];
+    if (existing && existing.type === "computed") {
+        const computed = existing;
+        const nextDeps = deps.map(getDepValue);
+        const changed = depsChanged(computed.lastDeps, nextDeps);
+        if (changed) {
+            try {
+                computed.value = factory();
+                computed.lastDeps = nextDeps;
+                computed.deps = deps.slice();
+            }
+            catch (err) {
+                console.error("Error in onComputed factory:", err);
+            }
+        }
+        return computed.getter;
+    }
+    else {
+        let value;
+        try {
+            value = factory();
+        }
+        catch (err) {
+            console.error("Error in onComputed factory:", err);
+            value = undefined;
+        }
+        const subs = new Set();
+        const getter = (() => {
+            try {
+                if (currentInstance) {
+                    const rer = instanceRerenders.get(currentInstance);
+                    if (rer) {
+                        subs.add(rer);
+                    }
+                }
+            }
+            catch { }
+            return value;
+        });
+        getter._isRefGetter = true;
+        const slot = {
+            type: "computed",
+            factory,
+            deps: deps.slice(),
+            lastDeps: deps.map(getDepValue),
+            value,
+            subs,
+            getter,
+        };
+        rec.hooks[idx] = slot;
+        return getter;
     }
 }
 /* =========================
