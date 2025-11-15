@@ -22,10 +22,34 @@ type EffectSlot = {
   cleanup?: (() => void) | void;
 };
 
-type HookSlot = RefSlot | EffectSlot | { type: "other"; value?: any };
+type MemoSlot = {
+  type: "memo";
+  factory: () => any;
+  deps?: any[];
+  lastDeps?: any[];
+  value?: any;
+};
+
+type ComputedSlot = {
+  type: "computed";
+  factory: () => any;
+  deps: any[];
+  lastDeps?: any[];
+  value?: any;
+  subs: Set<() => void>;
+  getter: (() => any) & { _isRefGetter?: true };
+};
+
+type HookSlot =
+  | RefSlot
+  | EffectSlot
+  | MemoSlot
+  | ComputedSlot
+  | { type: "other"; value?: any };
 
 type InstanceRecord = {
   mounted: Array<() => void>;
+  unmounted: Array<() => void>;
   hooks: HookSlot[];
   hookIndex: number;
 };
@@ -54,7 +78,7 @@ export function unregisterInstanceRerender(id: symbol) {
 
 export function createComponentInstance(): symbol {
   const id = Symbol("comp");
-  instances.set(id, { mounted: [], hooks: [], hookIndex: 0 });
+  instances.set(id, { mounted: [], unmounted: [], hooks: [], hookIndex: 0 });
   return id;
 }
 
@@ -73,6 +97,15 @@ export function clearCurrentInstance() {
 export function cleanupComponentInstance(id: symbol) {
   const rec = instances.get(id);
   if (!rec) return;
+
+  for (const cb of rec.unmounted) {
+    try {
+      cb();
+    } catch (err) {
+      console.error("Error in unmounted hook:", err);
+    }
+  }
+
   for (const slot of rec.hooks) {
     if (slot && (slot as EffectSlot).type === "effect") {
       const eff = slot as EffectSlot;
@@ -161,6 +194,16 @@ export function onMounted(cb: () => void) {
   }
   const rec = instances.get(currentInstance)!;
   rec.mounted.push(cb);
+}
+
+export function onUnmounted(cb: () => void) {
+  if (!currentInstance) {
+    throw new Error(
+      "onUnmounted must be called during component render (set current instance with setCurrentInstance)."
+    );
+  }
+  const rec = instances.get(currentInstance)!;
+  rec.unmounted.push(cb);
 }
 
 export function onEffect(effect: () => Cleanup, deps?: any[]) {
@@ -586,9 +629,6 @@ export function withContext<T, R>(
   const prevTop = stack.length ? stack[stack.length - 1] : undefined;
   stack.push(newGetter);
 
-  // If the provider binding itself changed (different getter identity),
-  // poke a global re-render so consumers calling useContext will run again
-  // and attach to the new getter.
   if (prevTop !== newGetter) {
     try {
       if (globalRerender) {
@@ -602,9 +642,113 @@ export function withContext<T, R>(
   try {
     return render();
   } finally {
-    // Pop and we're done. Subscriptions to the underlying ref getter persist
-    // across renders; consumers will re-attach on the next render pass anyway.
     stack.pop();
+  }
+}
+
+export function onMemo<T>(factory: () => T, deps?: any[]): T {
+  if (!currentInstance) {
+    throw new Error(
+      "onMemo must be called during component render (set current instance with setCurrentInstance)."
+    );
+  }
+  const rec = instances.get(currentInstance)!;
+  const idx = rec.hookIndex++;
+  const existing = rec.hooks[idx];
+
+  if (existing && (existing as any).type === "memo") {
+    const memo = existing as MemoSlot;
+    const nextDeps = deps?.map(getDepValue);
+    const changed = depsChanged(memo.lastDeps, nextDeps);
+    if (changed) {
+      try {
+        memo.value = factory();
+        memo.lastDeps = nextDeps;
+        memo.deps = deps ? deps.slice() : undefined;
+      } catch (err) {
+        console.error("Error in onMemo factory:", err);
+      }
+    }
+    return memo.value;
+  } else {
+    const slot: MemoSlot = {
+      type: "memo",
+      factory,
+      deps: deps ? deps.slice() : undefined,
+      lastDeps: undefined,
+      value: undefined,
+    };
+    try {
+      slot.value = factory();
+      slot.lastDeps = deps?.map(getDepValue);
+    } catch (err) {
+      console.error("Error in onMemo factory:", err);
+    }
+    rec.hooks[idx] = slot;
+    return slot.value;
+  }
+}
+
+export function onComputed<T>(
+  factory: () => T,
+  deps: any[]
+): (() => T) & { _isRefGetter?: true } {
+  if (!currentInstance) {
+    throw new Error(
+      "onComputed must be called during component render (set current instance with setCurrentInstance)."
+    );
+  }
+  const rec = instances.get(currentInstance)!;
+  const idx = rec.hookIndex++;
+  const existing = rec.hooks[idx];
+
+  if (existing && (existing as any).type === "computed") {
+    const computed = existing as ComputedSlot;
+    const nextDeps = deps.map(getDepValue);
+    const changed = depsChanged(computed.lastDeps, nextDeps);
+    if (changed) {
+      try {
+        computed.value = factory();
+        computed.lastDeps = nextDeps;
+        computed.deps = deps.slice();
+      } catch (err) {
+        console.error("Error in onComputed factory:", err);
+      }
+    }
+    return computed.getter;
+  } else {
+    let value: T;
+    try {
+      value = factory();
+    } catch (err) {
+      console.error("Error in onComputed factory:", err);
+      value = undefined as T;
+    }
+    const subs = new Set<() => void>();
+    const getter = (() => {
+      try {
+        if (currentInstance) {
+          const rer = instanceRerenders.get(currentInstance);
+          if (rer) {
+            subs.add(rer);
+          }
+        }
+      } catch {}
+      return value;
+    }) as any;
+    getter._isRefGetter = true;
+
+    const slot: ComputedSlot = {
+      type: "computed",
+      factory,
+      deps: deps.slice(),
+      lastDeps: deps.map(getDepValue),
+      value,
+      subs,
+      getter,
+    };
+    rec.hooks[idx] = slot;
+    return getter;
   }
 }
 
